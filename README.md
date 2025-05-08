@@ -3,7 +3,8 @@
 
 A system that provides users with personalized recommendations on where to buy or rent products and travel experiences based on their needs.
 
-https://designinglargescaleaisystems.streamlit.app
+[Streamlit application](https://designinglargescaleaisystems-v1.streamlit.app) (in progress)
+
 
 [Requirements](https://docs.google.com/document/d/1hjxACUqGpCPUHAd4Uc7aZNrUqpYdeydMBGXw691QWcg/edit?usp=sharing)
 
