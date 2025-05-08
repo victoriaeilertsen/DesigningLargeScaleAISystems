@@ -5,8 +5,6 @@ import json
 import os
 from schemas.a2a_message import A2AMessage
 
-# Groq API key
-GROQ_API_KEY = "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"
 
 # Load example dialog from file (as system prompt)
 EXAMPLE_DIALOG_PATH = os.path.join(os.path.dirname(__file__), '../docs/example_dialog.md')
@@ -26,9 +24,23 @@ Below is an example conversation for inspiration (do not copy, just use as a gui
 
 class DialogueAgent:
     def __init__(self):
+        import streamlit as st
+        import os
+        
+        if "GROQ_API_KEY" in st.secrets:
+            api_key = st.secrets["GROQ_API_KEY"]
+        else:
+            from dotenv import load_dotenv
+            load_dotenv()
+            api_key = os.getenv("GROQ_API_KEY")
+        
+
+        if api_key is None:
+            raise ValueError("GROQ_API_KEY is not set in secrets or .env file")
+
         self.llm = ChatGroq(
             model_name="llama3-8b-8192",
-            groq_api_key=GROQ_API_KEY
+            api_key=api_key
         )
         self.name = "Dialogue"
         self.description = (
