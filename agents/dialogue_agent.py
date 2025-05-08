@@ -27,20 +27,18 @@ class DialogueAgent:
         import streamlit as st
         import os
         
-        if "GROQ_API_KEY" in st.secrets:
-            api_key = st.secrets["GROQ_API_KEY"]
-        else:
-            from dotenv import load_dotenv
+        try:
+            API_KEY = st.secrets["GROQ_API_KEY"]
+        except (AttributeError, KeyError, RuntimeError):
             load_dotenv()
-            api_key = os.getenv("GROQ_API_KEY")
-        
+            API_KEY = os.getenv("GROQ_API_KEY")
 
-        if api_key is None:
+        if API_KEY is None:
             raise ValueError("GROQ_API_KEY is not set in secrets or .env file")
 
         self.llm = ChatGroq(
             model_name="llama3-8b-8192",
-            api_key=api_key
+            api_key=API_KEY
         )
         self.name = "Dialogue"
         self.description = (
