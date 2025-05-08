@@ -3,3 +3,4 @@ langchain_groq
 streamlit
 langchain-community
 duckduckgo-search
+python-dotenv
