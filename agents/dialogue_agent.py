@@ -24,16 +24,16 @@ Below is an example conversation for inspiration (do not copy, just use as a gui
 
 class DialogueAgent:
     def __init__(self):
-        import streamlit as st
-        import os
+        from dotenv import load_dotenv
         
         try:
+            _ = st.secrets._secrets_dict  
             API_KEY = st.secrets["GROQ_API_KEY"]
-        except (AttributeError, KeyError, RuntimeError):
+        except Exception:
             load_dotenv()
             API_KEY = os.getenv("GROQ_API_KEY")
-
-        if API_KEY is None:
+    
+        if not API_KEY:
             raise ValueError("GROQ_API_KEY is not set in secrets or .env file")
 
         self.llm = ChatGroq(
