@@ -9,6 +9,7 @@ class A2AMessage:
     receiver: str
     content: str
     timestamp: str = field(default_factory=lambda: datetime.datetime.utcnow().isoformat())
+    debug: Optional[dict] = None
 
 @dataclass
 class A2ATask:

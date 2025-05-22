@@ -1,22 +1,25 @@
 import sys
 import os
 import uuid
-from typing import Dict, List
+import asyncio
+from typing import Dict, List, Any
+from dotenv import load_dotenv
 
 # Fix the import path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../agents')))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../protocols')))
 
-from dialogue_agent import get_dialogue_agent
-from shopping_agent import get_shopping_agent
-from a2a_handler import A2AHandler
+from agents.dialogue_agent import DialogueAgent
+from agents.shopping_agent import ShoppingAgent
+from utils.helpers import create_a2a_message, log_a2a_message
 
 import streamlit as st
 
+# Ładowanie zmiennych środowiskowych
+load_dotenv()
+
 # Page configuration
 st.set_page_config(
-    page_title="A2A Chat Interface",
+    page_title="Smart Agent Chat",
     page_icon="🤖",
     layout="wide"
 )
@@ -28,26 +31,74 @@ if "current_task_id" not in st.session_state:
     st.session_state.current_task_id = None
 if "agents" not in st.session_state:
     st.session_state.agents = {
-        "dialogue": get_dialogue_agent(),
-        "shopping": get_shopping_agent()
+        "dialogue": DialogueAgent(),
+        "shopping": ShoppingAgent()
     }
 if "wishlist" not in st.session_state:
-    # Test item for demonstration
-    st.session_state.wishlist = [{
-        "name": "Mountain Bike Trek X-Caliber 8",
-        "price": "€1,299.99",
-        "store_url": "https://www.trekbikes.com"
-    }]
-if "a2a_handler" not in st.session_state:
-    st.session_state.a2a_handler = A2AHandler({
-        "dialogue": st.session_state.agents["dialogue"],
-        "shopping": st.session_state.agents["shopping"]
-    })
+    st.session_state.wishlist = []
+if "debug_mode" not in st.session_state:
+    st.session_state.debug_mode = False
 
-handler = st.session_state.a2a_handler
+async def process_message(prompt: str, task_id: str) -> None:
+    """Asynchroniczne przetwarzanie wiadomości.
+    
+    Args:
+        prompt: Wiadomość od użytkownika
+        task_id: ID zadania
+    """
+    try:
+        # Tworzenie wiadomości A2A
+        message = create_a2a_message(
+            content=prompt,
+            task_id=task_id
+        )
+        
+        # Logowanie wiadomości
+        log_a2a_message(message, "outgoing")
+        
+        # Wysłanie wiadomości do agenta dialogowego
+        response = await st.session_state.agents["dialogue"].handle_message(message, context={})
+        
+        # Logowanie odpowiedzi
+        log_a2a_message(response, "incoming")
+        
+        # Dodanie wiadomości do historii
+        st.session_state.messages.append({
+            "sender": "user",
+            "content": prompt,
+            "task_id": task_id
+        })
+        
+        if response.get("type") == "text":
+            st.session_state.messages.append({
+                "sender": "assistant",
+                "content": response["content"],
+                "task_id": task_id,
+                "debug": response
+            })
+            # Jeśli intencja to search, wywołaj agenta zakupowego
+            if response.get("intent") == "search":
+                shopping_response = await st.session_state.agents["shopping"].handle_message(message, context={})
+                st.session_state.messages.append({
+                    "sender": "shopping-agent",
+                    "content": shopping_response["content"],
+                    "task_id": task_id,
+                    "debug": shopping_response
+                })
+        else:
+            st.session_state.messages.append({
+                "sender": "assistant",
+                "content": f"Wystąpił błąd: {response.get('error', 'Nieznany błąd')}",
+                "task_id": task_id,
+                "debug": response
+            })
+            
+    except Exception as e:
+        st.error(f"Wystąpił błąd podczas przetwarzania wiadomości: {str(e)}")
 
 def main():
-    st.title("🤖 A2A Chat Interface")
+    st.title("🤖 Smart Agent Chat ")
+    st.markdown('<span style="font-size:1.5em; font-weight:bold; background: linear-gradient(90deg, #ff8a00, #e52e71); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">(not so smart yet lol)</span>', unsafe_allow_html=True)
     
     # Sidebar with agent information and wishlist
     with st.sidebar:
@@ -71,37 +122,34 @@ def main():
         
         st.divider()
         
+        # Debug mode toggle
+        st.header("🛠️ Debugging")
+        st.session_state.debug_mode = st.checkbox("Debug mode", value=st.session_state.debug_mode)
+        
         # Expandable agents section
         st.header("🤖 Available Agents")
         for agent_name, agent in st.session_state.agents.items():
-            with st.expander(f"{agent.name} Agent", expanded=False):
-                st.write(agent.description)
+            with st.expander(f"{agent.agent_card.name} Agent", expanded=False):
+                st.write(agent.agent_card.description)
                 st.write("Capabilities:")
-                for capability in agent.capabilities:
+                for capability in agent.agent_card.capabilities:
                     st.write(f"- {capability}")
 
-    # Display chat history for the current task (only once, always full history)
-    if st.session_state.current_task_id:
-        task = handler.get_task(st.session_state.current_task_id)
-        st.write(f"DEBUG: Number of messages in task: {len(task.messages) if task else 'No task'}")
-        if task:
-            for msg in task.messages:
-                sender = msg["sender"] if isinstance(msg, dict) else msg.sender
-                content = msg["content"] if isinstance(msg, dict) else msg.content
-                role = "user" if sender == "user" else "assistant"
-                with st.chat_message(role):
-                    st.write(content)
+    # Display chat history
+    for msg in st.session_state.messages:
+        role = "user" if msg["sender"] == "user" else ("assistant" if msg["sender"] == "assistant" else "shopping-agent")
+        with st.chat_message(role):
+            st.write(msg["content"])
+            if st.session_state.debug_mode and "debug" in msg:
+                st.markdown(f'<span style="color:gray; font-size: 0.8em;">Debug: {msg["debug"]}</span>', unsafe_allow_html=True)
 
     # User input
     if prompt := st.chat_input("Type your message..."):
         if not st.session_state.current_task_id:
             st.session_state.current_task_id = str(uuid.uuid4())
-        handler.submit_task(
-            sender="user",
-            receiver="dialogue",
-            content=prompt,
-            task_id=st.session_state.current_task_id
-        )
+            
+        # Uruchomienie asynchronicznego przetwarzania wiadomości
+        asyncio.run(process_message(prompt, st.session_state.current_task_id))
         st.rerun()
 
 if __name__ == "__main__":
