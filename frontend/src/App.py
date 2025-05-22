@@ -14,7 +14,7 @@ from utils.helpers import create_a2a_message, log_a2a_message
 
 import streamlit as st
 
-# Ładowanie zmiennych środowiskowych
+# Loading environment variables
 load_dotenv()
 
 # Page configuration
@@ -40,29 +40,29 @@ if "debug_mode" not in st.session_state:
     st.session_state.debug_mode = False
 
 async def process_message(prompt: str, task_id: str) -> None:
-    """Asynchroniczne przetwarzanie wiadomości.
+    """Asynchronous message processing.
     
     Args:
-        prompt: Wiadomość od użytkownika
-        task_id: ID zadania
+        prompt: User message
+        task_id: Task ID
     """
     try:
-        # Tworzenie wiadomości A2A
+        # Create A2A message
         message = create_a2a_message(
             content=prompt,
             task_id=task_id
         )
         
-        # Logowanie wiadomości
+        # Log message
         log_a2a_message(message, "outgoing")
         
-        # Wysłanie wiadomości do agenta dialogowego
+        # Send message to dialogue agent
         response = await st.session_state.agents["dialogue"].handle_message(message, context={})
         
-        # Logowanie odpowiedzi
+        # Log response
         log_a2a_message(response, "incoming")
         
-        # Dodanie wiadomości do historii
+        # Add message to history
         st.session_state.messages.append({
             "sender": "user",
             "content": prompt,
@@ -76,7 +76,7 @@ async def process_message(prompt: str, task_id: str) -> None:
                 "task_id": task_id,
                 "debug": response
             })
-            # Jeśli intencja to search, wywołaj agenta zakupowego
+            # If intent is search, call shopping agent
             if response.get("intent") == "search":
                 shopping_response = await st.session_state.agents["shopping"].handle_message(message, context={})
                 st.session_state.messages.append({
@@ -88,13 +88,13 @@ async def process_message(prompt: str, task_id: str) -> None:
         else:
             st.session_state.messages.append({
                 "sender": "assistant",
-                "content": f"Wystąpił błąd: {response.get('error', 'Nieznany błąd')}",
+                "content": f"An error occurred: {response.get('error', 'Unknown error')}",
                 "task_id": task_id,
                 "debug": response
             })
             
     except Exception as e:
-        st.error(f"Wystąpił błąd podczas przetwarzania wiadomości: {str(e)}")
+        st.error(f"An error occurred while processing the message: {str(e)}")
 
 def main():
     st.title("🤖 Smart Agent Chat ")
@@ -148,7 +148,7 @@ def main():
         if not st.session_state.current_task_id:
             st.session_state.current_task_id = str(uuid.uuid4())
             
-        # Uruchomienie asynchronicznego przetwarzania wiadomości
+        # Run asynchronous message processing
         asyncio.run(process_message(prompt, st.session_state.current_task_id))
         st.rerun()
 

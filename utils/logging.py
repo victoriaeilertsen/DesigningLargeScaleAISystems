@@ -3,21 +3,21 @@ import os
 from loguru import logger
 
 def setup_logging():
-    """Konfiguracja systemu logowania."""
-    # Tworzenie katalogu na logi jeśli nie istnieje
+    """Logging system configuration."""
+    # Create logs directory if it doesn't exist
     os.makedirs("logs", exist_ok=True)
     
-    # Usunięcie domyślnego handlera
+    # Remove default handler
     logger.remove()
     
-    # Dodanie handlera do konsoli
+    # Add console handler
     logger.add(
         sys.stderr,
         format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
         level="DEBUG"
     )
     
-    # Dodanie handlera do pliku
+    # Add file handler
     logger.add(
         "logs/app.log",
         rotation="1 day",
@@ -26,4 +26,4 @@ def setup_logging():
         level="DEBUG"
     )
     
-    logger.info("System logowania skonfigurowany") 
+    logger.info("Logging system configured") 

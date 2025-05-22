@@ -3,36 +3,36 @@ from dotenv import load_dotenv
 from loguru import logger
 import sys
 
-# Ładowanie zmiennych środowiskowych
+# Loading environment variables
 load_dotenv()
 
-# Podstawowe ustawienia aplikacji
+# Basic application settings
 APP_NAME = os.getenv("APP_NAME", "A2A Shopping Assistant")
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
-# Ustawienia A2A
+# A2A settings
 A2A_HOST = os.getenv("A2A_HOST", "localhost")
 A2A_PORT = int(os.getenv("A2A_PORT", "8000"))
 STREAMLIT_PORT = int(os.getenv("STREAMLIT_PORT", "8501"))
 
-# Ustawienia Groq
+# Groq settings
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
-    raise ValueError("GROQ_API_KEY nie jest ustawiony w zmiennych środowiskowych")
+    raise ValueError("GROQ_API_KEY is not set in environment variables")
 
 def setup_logging():
-    """Konfiguracja systemu logowania."""
-    # Usunięcie domyślnego handlera
+    """Logging system configuration."""
+    # Remove default handler
     logger.remove()
     
-    # Dodanie handlera do konsoli
+    # Add console handler
     logger.add(
         sys.stderr,
         format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
         level="DEBUG" if DEBUG else "INFO"
     )
     
-    # Dodanie handlera do pliku
+    # Add file handler
     logger.add(
         "logs/app.log",
         rotation="1 day",
@@ -41,4 +41,4 @@ def setup_logging():
         level="DEBUG" if DEBUG else "INFO"
     )
     
-    logger.info("System logowania skonfigurowany") 
+    logger.info("Logging system configured") 

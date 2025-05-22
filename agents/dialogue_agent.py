@@ -9,7 +9,7 @@ class DialogueAgent(AgentExecutor):
     def __init__(self, host="localhost", port=8001):
         self.agent_card = AgentCard(
             name="dialogue-agent",
-            description="Agent prowadzący dialog z użytkownikiem i ustalający intencje.",
+            description="Agent conducting dialogue with the user and determining intentions.",
             version="0.1.0",
             url=f"http://{host}:{port}",
             documentationUrl="https://example.com/dialogue-agent/docs",
@@ -23,12 +23,12 @@ class DialogueAgent(AgentExecutor):
             skills=[
                 AgentSkill(
                     id="dialogue",
-                    name="Dialog z użytkownikiem",
-                    description="Prowadzi rozmowę i rozpoznaje intencje użytkownika.",
+                    name="User Dialogue",
+                    description="Conducts conversation and recognizes user intentions.",
                     tags=["dialogue", "intent-detection"],
                     examples=[
-                        "Cześć, co mogę dla Ciebie zrobić?",
-                        "Chciałbym kupić laptopa."
+                        "Hello, how can I help you?",
+                        "I would like to buy a laptop."
                     ],
                     inputModes=["text/plain"],
                     outputModes=["text/plain"]
@@ -41,7 +41,7 @@ class DialogueAgent(AgentExecutor):
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         user_message = context.message.parts[0].text
         if re.search(r"(kupi|znajd|szukaj|zamów|order|buy|find)", user_message, re.IGNORECASE):
-            response = f"Chcesz coś znaleźć lub kupić: '{user_message}'. Przekazuję do agenta zakupowego."
+            response = f"You want to find or buy something: '{user_message}'. Forwarding to shopping agent."
         else:
             response = f"Echo: {user_message}"
         event_queue.enqueue_event(new_agent_text_message(response))

@@ -9,7 +9,7 @@ class ShoppingAgent(AgentExecutor):
     def __init__(self, host="localhost", port=8002):
         self.agent_card = AgentCard(
             name="shopping-agent",
-            description="Agent wyszukujący produkty w internecie.",
+            description="Agent searching for products on the internet.",
             version="0.1.0",
             url=f"http://{host}:{port}",
             documentationUrl="https://example.com/shopping-agent/docs",
@@ -23,12 +23,12 @@ class ShoppingAgent(AgentExecutor):
             skills=[
                 AgentSkill(
                     id="product-search",
-                    name="Wyszukiwanie produktów",
-                    description="Wyszukuje produkty w internecie na podstawie zapytania użytkownika.",
+                    name="Product Search",
+                    description="Searches for products on the internet based on user query.",
                     tags=["search", "shopping", "products"],
                     examples=[
-                        "Znajdź najnowszego iPhone'a.",
-                        "Szukam laptopa do 3000 zł."
+                        "Find the latest iPhone.",
+                        "I'm looking for a laptop under 3000."
                     ],
                     inputModes=["text/plain"],
                     outputModes=["text/plain"]
@@ -45,7 +45,7 @@ class ShoppingAgent(AgentExecutor):
         if results:
             response = "\n".join([f"{r['title']} - {r['href']}" for r in results])
         else:
-            response = "Nie znaleziono wyników."
+            response = "No results found."
         event_queue.enqueue_event(new_agent_text_message(response))
 
     @override

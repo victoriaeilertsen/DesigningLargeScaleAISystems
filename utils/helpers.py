@@ -3,35 +3,35 @@ import json
 from loguru import logger
 
 def load_json_file(file_path: str) -> Dict[str, Any]:
-    """Wczytuje plik JSON."""
+    """Loads a JSON file."""
     with open(file_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 def save_json_file(data: Dict[str, Any], file_path: str) -> None:
-    """Zapisuje dane do pliku JSON."""
+    """Saves data to a JSON file."""
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 def construct_agent_url(host: str, port: int) -> str:
-    """Konstruuje URL agenta A2A.
+    """Constructs an A2A agent URL.
     
     Args:
-        host: Host agenta
-        port: Port agenta
+        host: Agent host
+        port: Agent port
         
     Returns:
-        URL agenta w formacie http://host:port
+        Agent URL in format http://host:port
     """
     return f"http://{host}:{port}"
 
 def validate_a2a_message(message: Dict[str, Any]) -> bool:
-    """Waliduje wiadomość A2A.
+    """Validates an A2A message.
     
     Args:
-        message: Wiadomość do walidacji
+        message: Message to validate
         
     Returns:
-        True jeśli wiadomość jest poprawna, False w przeciwnym razie
+        True if message is valid, False otherwise
     """
     required_fields = ["type", "content", "task_id"]
     return all(field in message for field in required_fields)
@@ -41,15 +41,15 @@ def create_a2a_message(
     message_type: str = "message",
     task_id: str = None
 ) -> Dict[str, Any]:
-    """Tworzy wiadomość w formacie A2A.
+    """Creates a message in A2A format.
     
     Args:
-        content: Zawartość wiadomości
-        message_type: Typ wiadomości (domyślnie "message")
-        task_id: ID zadania (opcjonalne)
+        content: Message content
+        message_type: Message type (default: "message")
+        task_id: Task ID (optional)
         
     Returns:
-        Wiadomość w formacie A2A
+        Message in A2A format
     """
     message = {
         "type": message_type,
@@ -62,14 +62,14 @@ def create_a2a_message(
     return message
 
 def create_a2a_error(error: str, task_id: str = None) -> Dict[str, Any]:
-    """Tworzy wiadomość błędu w formacie A2A.
+    """Creates an error message in A2A format.
     
     Args:
-        error: Opis błędu
-        task_id: ID zadania (opcjonalne)
+        error: Error description
+        task_id: Task ID (optional)
         
     Returns:
-        Wiadomość błędu w formacie A2A
+        Error message in A2A format
     """
     return create_a2a_message(
         content={"error": error},
@@ -78,14 +78,14 @@ def create_a2a_error(error: str, task_id: str = None) -> Dict[str, Any]:
     )
 
 def create_a2a_success(content: Any, task_id: str = None) -> Dict[str, Any]:
-    """Tworzy wiadomość sukcesu w formacie A2A.
+    """Creates a success message in A2A format.
     
     Args:
-        content: Zawartość odpowiedzi
-        task_id: ID zadania (opcjonalne)
+        content: Response content
+        task_id: Task ID (optional)
         
     Returns:
-        Wiadomość sukcesu w formacie A2A
+        Success message in A2A format
     """
     return create_a2a_message(
         content=content,
@@ -94,10 +94,10 @@ def create_a2a_success(content: Any, task_id: str = None) -> Dict[str, Any]:
     )
 
 def log_a2a_message(message: Dict[str, Any], direction: str = "outgoing"):
-    """Loguje wiadomość A2A.
+    """Logs an A2A message.
     
     Args:
-        message: Wiadomość do zalogowania
-        direction: Kierunek wiadomości ("incoming" lub "outgoing")
+        message: Message to log
+        direction: Message direction ("incoming" or "outgoing")
     """
     logger.debug(f"A2A {direction} message: {json.dumps(message, indent=2)}") 

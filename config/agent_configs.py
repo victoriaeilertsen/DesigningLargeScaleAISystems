@@ -1,9 +1,9 @@
 from typing import Dict, Any
 
-# Konfiguracja agenta dialogowego
+# Dialogue agent configuration
 DIALOGUE_AGENT_CONFIG: Dict[str, Any] = {
     "name": "dialogue_agent",
-    "description": "Agent odpowiedzialny za prowadzenie dialogu z użytkownikiem i zarządzanie zadaniami",
+    "description": "Agent responsible for conducting dialogue with the user and managing tasks",
     "capabilities": [
         "understand_user_needs",
         "manage_tasks",
@@ -13,10 +13,10 @@ DIALOGUE_AGENT_CONFIG: Dict[str, Any] = {
     "port": 8000
 }
 
-# Konfiguracja agenta zakupowego
+# Shopping agent configuration
 SHOPPING_AGENT_CONFIG: Dict[str, Any] = {
     "name": "shopping_agent",
-    "description": "Agent odpowiedzialny za wyszukiwanie produktów i zarządzanie zakupami",
+    "description": "Agent responsible for product search and purchase management",
     "capabilities": [
         "search_products",
         "compare_prices",
@@ -27,7 +27,7 @@ SHOPPING_AGENT_CONFIG: Dict[str, Any] = {
     "port": 8001
 }
 
-# Konfiguracja wszystkich agentów
+# All agents configuration
 AGENT_CONFIGS = {
     "dialogue": DIALOGUE_AGENT_CONFIG,
     "shopping": SHOPPING_AGENT_CONFIG
