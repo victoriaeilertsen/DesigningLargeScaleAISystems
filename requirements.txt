@@ -1,22 +1,26 @@
 # Podstawowe zależności
 streamlit>=1.32.0
-python-dotenv>=1.0.0
+python-dotenv>=0.19.0
 
 # A2A SDK
-a2a-sdk>=0.2.3
+a2a-sdk>=0.2.1
 
 # Narzędzia AI/ML
 langchain>=0.1.0
 langchain-community>=0.0.10
 langchain-groq>=0.0.1
+langchain-google-genai>=0.0.6
 
 # Narzędzia wyszukiwania
-duckduckgo-search>=4.4.3
+duckduckgo-search>=3.9.3
 
 # Narzędzia pomocnicze
 pydantic>=2.6.3
-loguru>=0.7.2
+loguru>=0.5.3
 
 # Dodatkowe zależności
 asyncio>=3.4.3
-aiohttp>=3.9.3
+aiohttp>=3.8.1
+typing-extensions>=4.5.0
+python-jose>=3.3.0  # For JWT handling
+cryptography>=41.0.0  # For security features
