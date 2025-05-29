@@ -1,40 +1,48 @@
-import a2a.types
+import requests
 import uuid
 
-print("\n=== Klasy w a2a.types zawierające 'Part' i 'Artifact' ===")
-for name in dir(a2a.types):
-    if "Part" in name or "Artifact" in name:
-        print(name, getattr(a2a.types, name))
+ORCHESTRATOR_URL = "http://localhost:8000/stream"
 
-# Próbujemy utworzyć Part i Artifact
-try:
-    from a2a.types import Part, Artifact, TaskArtifactUpdateEvent
-    # Przykładowy tekst odpowiedzi
-    response_text = "To jest testowa odpowiedź bota."
-    # Tworzymy Part (sprawdzamy jakie argumenty przyjmuje konstruktor)
-    part = Part(root={"kind": "text", "text": response_text, "metadata": None})
-    print("\nInstancja Part:")
-    print(part)
-    print("model_dump:", part.model_dump())
+def test_a2a_message_stream():
+    # Tworzymy wiadomość zgodnie ze specyfikacją A2A
+    message = {
+        "kind": "message",
+        "messageId": str(uuid.uuid4()),
+        "role": "user",
+        "parts": [
+            {
+                "kind": "text",
+                "text": "I want to buy a red shirt"
+            }
+        ]
+    }
 
-    # Tworzymy Artifact
-    artifact = Artifact(
-        artifactId=str(uuid.uuid4()),
-        name="bot_response",
-        parts=[part]
-    )
-    print("\nInstancja Artifact:")
-    print(artifact)
-    print("model_dump:", artifact.model_dump())
+    # JSON-RPC request zgodnie ze specyfikacją
+    payload = {
+        "jsonrpc": "2.0",
+        "id": str(uuid.uuid4()),
+        "method": "message/stream",
+        "params": {
+            "message": message
+        }
+    }
 
-    # Tworzymy TaskArtifactUpdateEvent
-    event = TaskArtifactUpdateEvent(
-        taskId="test-task-id",
-        artifact=artifact
-    )
-    print("\nInstancja TaskArtifactUpdateEvent:")
-    print(event)
-    print("model_dump:", event.model_dump())
+    print("Wysyłam żądanie do Orchestratora (A2A message/stream)...")
+    try:
+        response = requests.post(
+            ORCHESTRATOR_URL,
+            json=payload,
+            timeout=15,
+            stream=True
+        )
+        print("Kod odpowiedzi HTTP:", response.status_code)
+        print("Nagłówki:", response.headers)
+        print("Odpowiedź:")
+        for line in response.iter_lines():
+            if line:
+                print(line.decode())
+    except Exception as e:
+        print("Błąd podczas komunikacji z Orchestrator:", e)
 
-except Exception as e:
-    print("Błąd przy tworzeniu Part/Artifact/Event:", e)
+if __name__ == "__main__":
+    test_a2a_message_stream()

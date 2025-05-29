@@ -1,6 +1,7 @@
-from a2a.types import AgentCard, AgentCapabilities, AgentSkill, TaskStatus, TaskState, TaskArtifactUpdateEvent, Artifact, Part, TextPart
+from a2a.types import AgentCard, AgentCapabilities, AgentSkill, TaskStatus, TaskState, TaskArtifactUpdateEvent, Artifact, Part, TextPart, Message, Role, TaskStatusUpdateEvent, Task
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
+from a2a.server.tasks import InMemoryTaskStore
 from typing_extensions import override
 import re
 import asyncio
@@ -8,6 +9,9 @@ import os
 import logging
 import uuid
 import json
+from loguru import logger
+from datetime import datetime, UTC
+from typing import AsyncGenerator
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -29,7 +33,7 @@ from langchain.chains import LLMChain
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 class ClassifierAgent(AgentExecutor):
-    def __init__(self):
+    def __init__(self, task_store: InMemoryTaskStore):
         logger.debug("Initializing ClassifierAgent")
         
         # Debug environment variables
@@ -74,15 +78,7 @@ class ClassifierAgent(AgentExecutor):
         logger.debug("Setting up LangChain components")
         self.prompt = PromptTemplate(
             input_variables=["user_message"],
-            template="""Analyze the user's message and classify their intent. Return a JSON object with the following structure:
-            {{
-                "intent": "shopping|general|wishlist",
-                "needs": ["list", "of", "identified", "needs"],
-                "confidence": 0.95,
-                "missing_info": ["list", "of", "missing", "information"]
-            }}
-            
-            User message: {user_message}"""
+            template="Respond to the user's message: {user_message}"
         )
         
         try:
@@ -102,6 +98,7 @@ class ClassifierAgent(AgentExecutor):
         
         self.chain = LLMChain(llm=self.llm, prompt=self.prompt)
         logger.debug("ClassifierAgent initialization completed")
+        self.task_store = task_store
         super().__init__()
 
     @override
@@ -196,5 +193,93 @@ class ClassifierAgent(AgentExecutor):
 
     @override
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        # Dla zgodności z A2A i AgentExecutor, execute wywołuje stream
-        await self.stream(context, event_queue)
+        try:
+            # Log the full incoming message object
+            logger.info(f"[CLASSIFIER] Full incoming message: {context.message!r}")
+
+            # Log each part in message.parts
+            for idx, part in enumerate(context.message.parts):
+                logger.info(f"[CLASSIFIER] part[{idx}] type: {type(part)}, value: {part!r}")
+
+            # Try to extract text (log what is actually extracted)
+            message_text = ""
+            for idx, part in enumerate(context.message.parts):
+                extracted = None
+                if isinstance(part, dict):
+                    if part.get('kind') == 'text':
+                        extracted = part.get('text', '')
+                else:
+                    kind = getattr(part, 'kind', None)
+                    text = getattr(part, 'text', None)
+                    if kind == 'text' and text is not None:
+                        extracted = text
+                    root = getattr(part, 'root', None)
+                    if root:
+                        kind = getattr(root, 'kind', None)
+                        text = getattr(root, 'text', None)
+                        if kind == 'text' and text is not None:
+                            extracted = text
+                logger.info(f"[CLASSIFIER] part[{idx}] extracted: {extracted!r}")
+                if extracted:
+                    message_text += extracted
+
+            logger.info(f"[CLASSIFIER] Final message_text passed to LLM: {message_text!r}")
+
+            # Update task status to working
+            task = await self.task_store.get(context.task_id)
+            if not task:
+                task = Task(
+                    id=context.task_id,
+                    contextId=context.context_id,
+                    status=TaskStatus(
+                        state=TaskState.submitted,
+                        timestamp=datetime.now(UTC).isoformat()
+                    )
+                )
+                await self.task_store.save(task)
+            task.status = TaskStatus(
+                state=TaskState.working,
+                timestamp=datetime.now(UTC).isoformat()
+            )
+            await self.task_store.save(task)
+
+            # Get LLM response
+            response = await self.chain.arun(user_message=message_text)
+            logger.info(f"[CLASSIFIER] LLM response: {response}")
+
+            # Always wrap LLM response in a Message with a TextPart
+            response_message = Message(
+                messageId=str(uuid.uuid4()),
+                role=Role.agent,
+                parts=[TextPart(text=str(response))]
+            )
+
+            # Send completed event
+            event_queue.enqueue_event(TaskStatusUpdateEvent(
+                contextId=context.context_id,
+                taskId=context.task_id,
+                status=TaskStatus(
+                    state=TaskState.completed,
+                    message=response_message,
+                    timestamp=datetime.now(UTC).isoformat()
+                ),
+                final=True
+            ))
+
+        except Exception as e:
+            logger.error(f"Error in classifier execute: {str(e)}")
+            error_message = Message(
+                messageId=str(uuid.uuid4()),
+                role=Role.agent,
+                parts=[TextPart(text=f"An error occurred: {str(e)}")]
+            )
+            event_queue.enqueue_event(TaskStatusUpdateEvent(
+                contextId=context.context_id,
+                taskId=context.task_id,
+                status=TaskStatus(
+                    state=TaskState.failed,
+                    message=error_message,
+                    timestamp=datetime.now(UTC).isoformat()
+                ),
+                final=True
+            ))

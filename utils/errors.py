@@ -9,10 +9,14 @@ class A2AError(Exception):
         )
         super().__init__(message)
 
-class TaskNotFoundError(A2AError):
+class TaskNotFoundError(JSONRPCError):
     """Raised when a task is not found."""
     def __init__(self, task_id: str):
-        super().__init__(-32001, f"Task {task_id} not found")
+        super().__init__(
+            code=-32601,
+            message=f"Task not found: {task_id}",
+            data={"type": "task_not_found", "task_id": task_id}
+        )
 
 class InvalidMessageError(A2AError):
     """Raised when a message is invalid."""
@@ -34,7 +38,20 @@ class RateLimitError(A2AError):
     def __init__(self, message: str = "Rate limit exceeded"):
         super().__init__(-32005, message)
 
-class ValidationError(A2AError):
+class ValidationError(JSONRPCError):
     """Raised when input validation fails."""
     def __init__(self, message: str):
-        super().__init__(-32006, f"Validation error: {message}") 
+        super().__init__(
+            code=-32602,
+            message=f"Validation error: {message}",
+            data={"type": "validation_error"}
+        )
+
+class AgentCommunicationError(JSONRPCError):
+    """Raised when communication with another agent fails."""
+    def __init__(self, message: str):
+        super().__init__(
+            code=-32000,
+            message=f"Agent communication error: {message}",
+            data={"type": "agent_communication_error"}
+        ) 

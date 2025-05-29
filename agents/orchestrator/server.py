@@ -7,37 +7,29 @@ from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
 from agents.orchestrator.agent import OrchestratorAgent
 import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
-import json
+from fastapi import FastAPI
+from loguru import logger
 
-# Initialize agent and request handler
-agent = OrchestratorAgent()
+# Initialize FastAPI app
+app = FastAPI()
+
+# Initialize task store and request handler
+task_store = InMemoryTaskStore()
+agent = OrchestratorAgent(task_store)
 request_handler = DefaultRequestHandler(
     agent_executor=agent,
-    task_store=InMemoryTaskStore(),
+    task_store=task_store
 )
 
-# Create A2A application
+# Create A2A application and mount it under /a2a
 a2a_app = A2AStarletteApplication(agent_card=agent.agent_card, http_handler=request_handler)
+app.mount("/a2a", a2a_app.build())
 
-# Create FastAPI app and mount A2A app
-app = FastAPI()
-app.mount("/", a2a_app.build())
-
-@app.post("/stream")
-async def stream_endpoint(request: Request):
-    body = await request.json()
-    message = body["params"]["message"]
-    context = request_handler.create_context_from_message(message)
-    event_queue = request_handler.create_event_queue(context)
-
-    async def event_generator():
-        await agent.stream(context, event_queue)
-        async for event in event_queue:
-            yield f"data: {json.dumps(event)}\r\n\r\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+@app.get("/")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "ok"}
 
 if __name__ == "__main__":
+    logger.info("[ORCHESTRATOR] Starting server on port 8000")
     uvicorn.run(app, host="0.0.0.0", port=8000) 

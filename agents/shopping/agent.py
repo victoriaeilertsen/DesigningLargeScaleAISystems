@@ -1,11 +1,15 @@
-from a2a.types import AgentCard, AgentCapabilities, AgentSkill, TaskStatus, TaskState, TaskArtifactUpdateEvent, Artifact, Part, TextPart
+from a2a.types import AgentCard, AgentCapabilities, AgentSkill, TaskStatus, TaskState, TaskArtifactUpdateEvent, Artifact, Part, TextPart, Message, Role, TaskStatusUpdateEvent, Task
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
+from a2a.server.tasks import InMemoryTaskStore
 from typing_extensions import override
+from typing import AsyncGenerator
 import asyncio
 import os
 import logging
 import uuid
+from loguru import logger
+from datetime import datetime, UTC
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -27,7 +31,7 @@ from langchain.chains import LLMChain
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 class ShoppingAgent(AgentExecutor):
-    def __init__(self):
+    def __init__(self, task_store: InMemoryTaskStore):
         logger.debug("Initializing ShoppingAgent")
         
         # Debug environment variables
@@ -90,132 +94,118 @@ class ShoppingAgent(AgentExecutor):
         
         self.chain = LLMChain(llm=self.llm, prompt=self.prompt)
         logger.debug("ShoppingAgent initialization completed")
+        self.task_store = task_store
         super().__init__()
 
     @override
-    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> AsyncGenerator[TaskStatusUpdateEvent, None]:
+        """Execute the shopping agent."""
         try:
-            logger.debug("Starting execute method")
+            # Extract message text from context (handle both dict and object cases)
+            message_text = ""
+            for part in context.message.parts:
+                if isinstance(part, dict):
+                    if part.get('kind') == 'text':
+                        message_text += part.get('text', '')
+                else:
+                    if getattr(part, 'kind', None) == 'text':
+                        message_text += getattr(part, 'text', '')
             
-            # Validate input
-            if not context.message.parts:
-                logger.error("No message parts found")
-                raise ValidationError("Message must contain at least one part")
-
-            # Update task status to running
-            logger.debug("Enqueueing task status: working")
-            try:
-                event_queue.enqueue_event(create_task_status_event(
-                    context.task_id,
-                    create_task_status(TaskState.working)
-                ))
-            except Exception as e:
-                logger.error(f"Enqueue failed (working): {type(e).__name__}: {e}")
-                raise
-
-            # Get message
-            user_message = context.message.parts[0].root.text
-            logger.debug(f"Processing message: {user_message}")
-
-            # --- LANGCHAIN EXECUTION ---
-            logger.debug("Starting LLM execution")
-            try:
-                response = await asyncio.get_event_loop().run_in_executor(
-                    None, 
-                    lambda: self.chain.invoke({
-                        "user_message": user_message
-                    })
+            # Get or create task
+            task = await self.task_store.get(context.task_id)
+            if not task:
+                task = Task(
+                    id=context.task_id,
+                    contextId=context.context_id,
+                    status=TaskStatus(
+                        state=TaskState.submitted,
+                        timestamp=datetime.now(UTC).isoformat()
+                    )
                 )
-                logger.debug(f"LLM response received: {response}")
-                logger.debug("Enqueueing streaming message")
-                try:
-                    event_queue.enqueue_event(create_streaming_message(response))
-                except Exception as e:
-                    logger.error(f"Enqueue failed (streaming): {type(e).__name__}: {e}")
-                    raise
-            except Exception as e:
-                logger.error(f"Error in LLM execution: {str(e)}")
-                raise
-
+                await self.task_store.save(task)
+            
+            # Update task status to working
+            task.status = TaskStatus(
+                state=TaskState.working,
+                timestamp=datetime.now(UTC).isoformat()
+            )
+            await self.task_store.save(task)
+            
+            # Process message
+            response = await self.chain.arun(message=message_text)
+            logger.info(f"[SHOPPING] LLM response: {response}")
+            
+            # Create response message
+            response_message = Message(
+                messageId=str(uuid.uuid4()),
+                role=Role.agent,
+                parts=[TextPart(text=response if isinstance(response, str) else str(response))]
+            )
+            
             # Update task status to completed
-            logger.debug("Enqueueing task status: completed")
-            try:
-                event_queue.enqueue_event(create_task_status_event(
-                    context.task_id,
-                    create_task_status(TaskState.completed)
-                ))
-            except Exception as e:
-                logger.error(f"Enqueue failed (completed): {type(e).__name__}: {e}")
-                raise
-            logger.debug("Execute method completed successfully")
-
+            task.status = TaskStatus(
+                state=TaskState.completed,
+                message=response_message,
+                timestamp=datetime.now(UTC).isoformat()
+            )
+            await self.task_store.save(task)
+            
+            event_queue.enqueue_event(TaskStatusUpdateEvent(
+                contextId=context.context_id,
+                taskId=context.task_id,
+                status=task.status,
+                final=True
+            ))
+                
         except Exception as e:
-            logger.error(f"Error in execute method: {str(e)}")
-            # Update task status to failed
-            logger.debug("Enqueueing task status: failed")
-            try:
-                event_queue.enqueue_event(create_task_status_event(
-                    context.task_id,
-                    create_task_status(TaskState.failed, str(e))
-                ))
-            except Exception as e2:
-                logger.error(f"Enqueue failed (failed): {type(e2).__name__}: {e2}")
-                raise
-            raise
+            logger.error(f"[SHOPPING] Error processing message: {str(e)}")
+            error_message = Message(
+                messageId=str(uuid.uuid4()),
+                role=Role.agent,
+                parts=[TextPart(text=str(e))]
+            )
+            if task:
+                task.status = TaskStatus(
+                    state=TaskState.failed,
+                    message=error_message,
+                    timestamp=datetime.now(UTC).isoformat()
+                )
+                await self.task_store.save(task)
+            event_queue.enqueue_event(TaskStatusUpdateEvent(
+                contextId=context.context_id,
+                taskId=context.task_id,
+                status={
+                    "state": TaskState.failed.value,
+                    "message": error_message,
+                    "timestamp": datetime.now(UTC).isoformat()
+                },
+                final=True
+            ))
 
     @override
     async def stream(self, context: RequestContext, event_queue: EventQueue) -> None:
         logger.info("=== [SHOPPING STREAM CALLED] ===")
         try:
-            logger.debug("Enqueueing task status: working")
+            # Create and enqueue status update
             event_queue.enqueue_event(create_task_status_event(
                 context.task_id,
-                create_task_status(TaskState.working)
+                create_task_status(TaskState.working, timestamp=datetime.now(UTC).isoformat())
             ))
-
-            user_message = context.message.parts[0].root.text
-            logger.debug(f"Processing message (stream): {user_message}")
-
-            response = await asyncio.get_event_loop().run_in_executor(
-                None, 
-                lambda: self.chain.invoke({
-                    "user_message": user_message
-                })
-            )
-            logger.debug(f"LLM response received (stream): {response}")
-
-            # Tworzymy Artifact i TaskArtifactUpdateEvent zgodnie z A2A
-            part = Part(root=TextPart(kind='text', metadata=None, text=response if isinstance(response, str) else response.get("text", str(response))))
-            artifact = Artifact(
-                artifactId=str(uuid.uuid4()),
-                name="shopping_response",
-                parts=[part]
-            )
-            logger.info(f"Artifact name: {artifact.name}, text: {artifact.parts[0].root.text}")
-            event = TaskArtifactUpdateEvent(
-                contextId=context.context_id,
-                taskId=context.task_id,
-                artifact=artifact
-            )
-            # Logujemy artifact i event tuż przed wysłaniem
-            logger.debug(f"Artifact przed wysłaniem: {artifact}")
-            logger.debug(f"Event przed wysłaniem: {event}")
-            # Asercja: sprawdzamy, czy artifact i part są poprawne
-            assert artifact.parts, "Artifact nie może być pusty"
-            assert artifact.parts[0].root.text, "Part nie może być pusty"
-            event_queue.enqueue_event(event)
-
-            logger.debug("Enqueueing task status: completed")
+            
+            # Simulate processing
+            await asyncio.sleep(0.1)
+            
+            # Create and enqueue completion event
             event_queue.enqueue_event(create_task_status_event(
                 context.task_id,
-                create_task_status(TaskState.completed)
+                create_task_status(TaskState.completed, timestamp=datetime.now(UTC).isoformat())
             ))
 
         except Exception as e:
             logger.error(f"Error in stream method: {str(e)}")
             event_queue.enqueue_event(create_task_status_event(
                 context.task_id,
-                create_task_status(TaskState.failed, str(e))
+                create_task_status(TaskState.failed, str(e), timestamp=datetime.now(UTC).isoformat())
             ))
             raise
 
@@ -225,7 +215,7 @@ class ShoppingAgent(AgentExecutor):
         try:
             event_queue.enqueue_event(create_task_status_event(
                 context.task_id,
-                create_task_status(TaskState.cancelled)
+                create_task_status(TaskState.cancelled, timestamp=datetime.now(UTC).isoformat())
             ))
         except Exception as e:
             logger.error(f"Enqueue failed (cancelled): {type(e).__name__}: {e}")

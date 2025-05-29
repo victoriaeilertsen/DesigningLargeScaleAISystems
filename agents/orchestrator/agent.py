@@ -1,7 +1,8 @@
-from a2a.types import AgentCard, AgentCapabilities, AgentSkill, TaskStatus, TaskState, TaskArtifactUpdateEvent, Artifact, Part, TextPart, TaskStatusUpdateEvent, Message
+from a2a.types import AgentCard, AgentCapabilities, AgentSkill, TaskStatus, TaskState, TaskArtifactUpdateEvent, Artifact, Part, TextPart, TaskStatusUpdateEvent, Message, Role, Task
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from typing_extensions import override
+from typing import Optional, AsyncGenerator
 import re
 import asyncio
 import aiohttp
@@ -9,10 +10,9 @@ import os
 import logging
 import uuid
 import json
-
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+from config.settings import AGENT_CONFIG, TASK_CONFIG
+from loguru import logger
+from datetime import datetime, UTC
 
 from utils.a2a_utils import (
     create_task_status,
@@ -20,9 +20,10 @@ from utils.a2a_utils import (
     create_streaming_message,
     create_task_status_event,
     create_artifact,
-    create_artifact_part_text
+    create_artifact_part_text,
+    get_a2a_message_send_payload
 )
-from utils.errors import ValidationError, TaskNotFoundError
+from utils.errors import ValidationError, TaskNotFoundError, AgentCommunicationError
 from .prompts import ORCHESTRATOR_SYSTEM_PROMPT
 
 # --- LANGCHAIN IMPORTS ---
@@ -30,15 +31,18 @@ from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+from a2a.server.events.event_queue import EventQueue
+from a2a.server.tasks import InMemoryTaskStore
+
 class OrchestratorAgent(AgentExecutor):
-    def __init__(self):
-        logger.debug("Initializing OrchestratorAgent")
+    def __init__(self, task_store: InMemoryTaskStore):
+        logger.debug("=== [ORCHESTRATOR] Initializing OrchestratorAgent ===")
         
         self.agent_card = AgentCard(
-            name="orchestrator-agent",
-            description="Agent responsible for coordinating and routing requests to specialized agents.",
+            name=AGENT_CONFIG["orchestrator"]["name"],
+            description=AGENT_CONFIG["orchestrator"]["description"],
             version="0.1.0",
-            url="http://localhost:8000",
+            url=AGENT_CONFIG["orchestrator"]["url"],
             documentationUrl="https://example.com/orchestrator-agent/docs",
             capabilities=AgentCapabilities(
                 streaming=True,
@@ -63,284 +67,255 @@ class OrchestratorAgent(AgentExecutor):
                 )
             ]
         )
+        logger.debug(f"[ORCHESTRATOR] Agent card created: {self.agent_card.model_dump()}")
+        
         self.system_prompt = ORCHESTRATOR_SYSTEM_PROMPT
         self.agent_endpoints = {
-            "classifier": "http://localhost:8001/stream",
-            "shopping": "http://localhost:8002/stream"
+            "classifier": f"{AGENT_CONFIG['classifier']['url']}/a2a",
+            "shopping": f"{AGENT_CONFIG['shopping']['url']}/a2a"
         }
+        logger.debug(f"[ORCHESTRATOR] Agent endpoints configured: {self.agent_endpoints}")
         
         # --- LANGCHAIN SETUP ---
-        logger.debug("Setting up LangChain components")
+        logger.debug("[ORCHESTRATOR] Setting up LangChain components")
         self.prompt = PromptTemplate(
             input_variables=["user_message", "target_agent"],
             template=ORCHESTRATOR_SYSTEM_PROMPT
         )
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
+            logger.error("[ORCHESTRATOR] GOOGLE_API_KEY not set in environment variables")
             raise ValueError("GOOGLE_API_KEY environment variable not set")
         self.llm = ChatGoogleGenerativeAI(
             api_key=api_key,
             model="gemini-1.5-flash"
         )
         self.chain = LLMChain(llm=self.llm, prompt=self.prompt)
-        logger.debug("LangChain setup completed")
+        logger.debug("[ORCHESTRATOR] LangChain setup completed")
+        self.task_store = task_store
         super().__init__()
 
-    def _determine_target_agent(self, message: str) -> str:
-        """Determine which agent should handle the request."""
-        # Check for shopping-related keywords
-        if re.search(r"(kupi|znajd|szukaj|zamów|order|buy|find|product|price|cost)", message, re.IGNORECASE):
-            return "shopping"
-        # Default to classifier agent for general conversation
-        return "classifier"
-
-    @override
-    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        logger.info("=== [ORCH EXECUTE CALLED] ===")
+    async def _determine_target_agent(self, message_text: str) -> Optional[str]:
+        """Determine which agent should handle the message."""
         try:
-            logger.debug("Starting execute method")
-            
-            # Validate input
-            if not context.message.parts:
-                logger.error("No message parts found")
-                raise ValidationError("Message must contain at least one part")
-
-            # Update task status to running
-            logger.debug("Enqueueing task status: working")
-            try:
-                event_queue.enqueue_event(TaskStatusUpdateEvent(
-                    contextId=context.context_id,
-                    taskId=context.task_id,
-                    status=TaskStatus(state=TaskState.working),
-                    final=False
-                ))
-            except Exception as e:
-                logger.error(f"Enqueue failed (working): {type(e).__name__}: {e}")
-                raise
-
-            # Get message
-            user_message = context.message.parts[0].root.text
-            logger.debug(f"Processing message: {user_message}")
-
-            # Determine target agent
-            target_agent = self._determine_target_agent(user_message)
-            logger.debug(f"Target agent determined: {target_agent}")
-
-            # Create artifact with routing decision
-            artifact = Artifact(
-                artifactId=str(uuid.uuid4()),
-                name="routing_decision",
-                parts=[Part(root=TextPart(
-                    kind='text',
-                    metadata=None,
-                    text=json.dumps({
-                    "message": user_message,
-                    "target_agent": target_agent,
-                    "reason": f"Message contains keywords indicating {target_agent} agent should handle it"
-                    })
-                ))]
+            # Use LLM to determine target agent
+            response = await self.llm.ainvoke(
+                f"""Analyze the following message and determine which agent should handle it.
+                Available agents: shopping, classifier
+                Return only the agent name.
+                
+                Message: {message_text}"""
             )
-            logger.debug("Enqueueing task artifact: routing_decision")
-            try:
-                event = TaskArtifactUpdateEvent(
-                    contextId=context.context_id,
-                    taskId=context.task_id,
-                    artifact=artifact
-                )
-                event_queue.enqueue_event(event)
-            except Exception as e:
-                logger.error(f"Enqueue failed (artifact): {type(e).__name__}: {e}")
-                raise
-
-            # --- LANGCHAIN EXECUTION ---
-            logger.debug("Starting LLM execution")
-            try:
-                response = await asyncio.get_event_loop().run_in_executor(
-                    None, 
-                    lambda: self.chain.invoke({
-                        "user_message": user_message,
-                        "target_agent": target_agent
-                    })
-                )
-                logger.debug(f"LLM response received: {response}")
-                # Extract text for A2A protocol compliance
-                if isinstance(response, dict) and "text" in response:
-                    response_text = response["text"]
-                else:
-                    response_text = str(response)
-                logger.debug("Enqueueing streaming message")
-                try:
-                    artifact = Artifact(
-                        artifactId=str(uuid.uuid4()),
-                        name="orchestrator_response",
-                        parts=[Part(root=TextPart(
-                            kind='text',
-                            metadata=None,
-                            text=response_text
-                        ))]
-                    )
-                    event = TaskArtifactUpdateEvent(
-                        contextId=context.context_id,
-                        taskId=context.task_id,
-                        artifact=artifact
-                    )
-                    event_queue.enqueue_event(event)
-                except Exception as e:
-                    logger.error(f"Enqueue failed (streaming): {type(e).__name__}: {e}")
-                    raise
-            except Exception as e:
-                logger.error(f"Error in LLM execution: {str(e)}")
-                raise
-
-            # Update task status to completed
-            logger.debug("Enqueueing task status: completed")
-            try:
-                event_queue.enqueue_event(TaskStatusUpdateEvent(
-                    contextId=context.context_id,
-                    taskId=context.task_id,
-                    status=TaskStatus(state=TaskState.completed),
-                    final=True
-                ))
-            except Exception as e:
-                logger.error(f"Enqueue failed (completed): {type(e).__name__}: {e}")
-                raise
-            logger.debug("Execute method completed successfully")
-
+            text = response.content if hasattr(response, 'content') else str(response)
+            logger.info(f"LLM response for agent determination: {text}")
+            if "shopping" in text.lower():
+                return "shopping"
+            elif "classifier" in text.lower():
+                return "classifier"
+            return None
         except Exception as e:
-            logger.error(f"Error in execute method: {str(e)}")
-            # Update task status to failed
-            logger.debug("Enqueueing task status: failed")
-            try:
-                error_message = Message(
-                    messageId=str(uuid.uuid4()),
-                    role="agent",
-                    parts=[Part(root=TextPart(kind="text", text=str(e)))]
-                )
-                event_queue.enqueue_event(TaskStatusUpdateEvent(
-                    contextId=context.context_id,
-                    taskId=context.task_id,
-                    status=TaskStatus(state=TaskState.failed, message=error_message),
-                    final=True
-                ))
-            except Exception as e2:
-                logger.error(f"Enqueue failed (failed): {type(e2).__name__}: {e2}")
-                raise
-            raise
+            logger.error(f"Error determining target agent: {str(e)}")
+            return None
 
-    @override
-    async def stream(self, context: RequestContext, event_queue: EventQueue) -> None:
-        logger.info("=== [ORCH STREAM CALLED] ===")
+    async def _forward_to_agent(self, target_agent: str, context: RequestContext) -> AsyncGenerator[TaskStatusUpdateEvent, None]:
+        """Forward the message to the target agent."""
         try:
-            logger.info(f"[FORWARDING] TaskID: {context.task_id}, ContextID: {context.context_id}")
-            logger.info("[FORWARDING] Enqueueing task status: working")
-            event_queue.enqueue_event(create_task_status_event(
-                context.task_id,
-                create_task_status(TaskState.working)
-            ))
-
-            user_message = context.message.parts[0].root.text
-            logger.info(f"[FORWARDING] Processing message (stream): {user_message}")
-
-            target_agent = self._determine_target_agent(user_message)
-            logger.info(f"[FORWARDING] Target agent determined: {target_agent}")
-
-            # Enqueue routing_decision artifact
-            routing_decision = {
-                "message": user_message,
-                "target_agent": target_agent,
-                "reason": f"Message contains keywords indicating {target_agent} agent should handle it"
-            }
-            event_queue.enqueue_event(TaskArtifactUpdateEvent(
-                contextId=context.context_id,
-                taskId=context.task_id,
-                artifact=Artifact(
-                    artifactId=str(uuid.uuid4()),
-                    name="routing_decision",
-                    parts=[Part(root=TextPart(
-                        kind='text',
-                        metadata=None,
-                        text=json.dumps(routing_decision)
-                    ))]
-                )
-            ))
-
-            # Forward to target agent
-            target_url = self.agent_endpoints[target_agent]
-            logger.info(f"[FORWARDING] Sending to {target_agent} at {target_url}")
-            logger.info(f"[FORWARDING] POST to {target_url}")
+            if target_agent not in self.agent_endpoints:
+                raise ValueError(f"Unknown agent: {target_agent}")
+            
+            # Create HTTP client session
             async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    target_url,
-                    json={
-                        "jsonrpc": "2.0",
-                        "id": str(uuid.uuid4()),
-                        "method": "message/stream",
-                        "params": {
-                            "message": {
-                                "role": "user",
-                                "parts": [{"kind": "text", "text": user_message}],
-                                "messageId": str(uuid.uuid4())
-                            }
-                        }
-                    }
-                ) as response:
-                    logger.info(f"[FORWARDING] HTTP status: {response.status}")
+                # Prepare payload
+                payload = get_a2a_message_send_payload(context.message)
+                
+                # Send request to target agent
+                async with session.post(self.agent_endpoints[target_agent], json=payload) as response:
+                    if response.status != 200:
+                        raise AgentCommunicationError(f"Failed to communicate with {target_agent}: {response.status}")
+            
+                    # Process response stream
                     async for line in response.content:
                         if line:
                             try:
-                                line_text = line.decode("utf-8")
-                                logger.info(f"[FORWARDING] Received line: {line_text}")
-                                if line_text.startswith("data: "):
-                                    event_data = json.loads(line_text[6:])
-                                    if "result" in event_data:
-                                        result = event_data["result"]
-                                        if "artifact" in result:
-                                            event_queue.enqueue_event(TaskArtifactUpdateEvent(
-                                                contextId=context.context_id,
-                                                taskId=context.task_id,
-                                                artifact=result["artifact"]
-                                            ))
-                                        elif "status" in result:
-                                            event_queue.enqueue_event(TaskStatusUpdateEvent(
-                                                contextId=context.context_id,
-                                                taskId=context.task_id,
-                                                status=result["status"],
-                                                final=result.get("final", False)
-                                            ))
-                            except Exception as e:
-                                logger.error(f"Error processing event from {target_agent}: {str(e)}")
+                                event_data = json.loads(line.decode('utf-8'))
+                                if 'data' in event_data:
+                                    event = TaskStatusUpdateEvent.model_validate_json(event_data['data'])
+                                    yield event
+                            except json.JSONDecodeError as e:
+                                logger.error(f"Error decoding event: {str(e)}")
                                 continue
-
-            # Mark task as completed
-            event_queue.enqueue_event(create_task_status_event(
-                context.task_id,
-                create_task_status(TaskState.completed),
-                final=True
-            ))
-
+                
         except Exception as e:
-            logger.error(f"Error in stream method: {str(e)}")
-            event_queue.enqueue_event(create_task_status_event(
-                context.task_id,
-                create_task_status(TaskState.failed, str(e)),
+            logger.error(f"Error forwarding to agent {target_agent}: {str(e)}")
+            error_message = Message(
+                messageId=str(uuid.uuid4()),
+                role=Role.agent,
+                parts=[TextPart(text=f"Error forwarding to {target_agent}: {str(e)}")]
+            )
+            yield TaskStatusUpdateEvent(
+                contextId=context.context_id,
+                taskId=context.task_id,
+                status=TaskStatus(
+                    state=TaskState.failed,
+                    message=error_message,
+                    timestamp=datetime.now(UTC).isoformat()
+                ),
+                final=True
+            )
+
+    @override
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        try:
+            message_text = ""
+            for part in context.message.parts:
+                if isinstance(part, TextPart):
+                    message_text += part.text
+                elif isinstance(part, dict) and part.get('kind') == 'text':
+                    message_text += part.get('text', '')
+            
+            task = await self.task_store.get(context.task_id)
+            if not task:
+                task = Task(
+                    id=context.task_id,
+                    contextId=context.context_id,
+                    status=TaskStatus(
+                        state=TaskState.submitted,
+                        timestamp=datetime.now(UTC).isoformat()
+                    )
+                )
+                await self.task_store.save(task)
+            
+            task.status = TaskStatus(
+                state=TaskState.working,
+                timestamp=datetime.now(UTC).isoformat()
+            )
+            await self.task_store.save(task)
+            
+            target_agent = await self._determine_target_agent(message_text)
+            if not target_agent:
+                error_message = Message(
+                    messageId=str(uuid.uuid4()),
+                    role=Role.agent,
+                    parts=[TextPart(text="I couldn't determine which agent should handle your request. Please try rephrasing.")]
+                )
+                event_queue.enqueue_event(TaskStatusUpdateEvent(
+                    contextId=context.context_id,
+                    taskId=context.task_id,
+                    status=TaskStatus(
+                        state=TaskState.failed,
+                        message=error_message,
+                        timestamp=datetime.now(UTC).isoformat()
+                    ),
+                    final=True
+                ))
+                return
+            
+            async for event in self._forward_to_agent(target_agent, context):
+                event_queue.enqueue_event(event)
+                
+        except Exception as e:
+            logger.error(f"Error in orchestrator execute: {str(e)}")
+            error_message = Message(
+                messageId=str(uuid.uuid4()),
+                role=Role.agent,
+                parts=[TextPart(text=f"An error occurred: {str(e)}")]
+            )
+            event_queue.enqueue_event(TaskStatusUpdateEvent(
+                contextId=context.context_id,
+                taskId=context.task_id,
+                status=TaskStatus(
+                    state=TaskState.failed,
+                    message=error_message,
+                    timestamp=datetime.now(UTC).isoformat()
+                ),
                 final=True
             ))
-            raise
+
+    @override
+    async def stream(self, context: RequestContext, event_queue: EventQueue) -> None:
+        """Handle streaming requests."""
+        logger.debug("[ORCHESTRATOR] Stream method called")
+        try:
+            if not context.context_id or not context.task_id:
+                raise ValueError("Invalid context: missing context_id or task_id")
+            
+            async for event in self.execute(context):
+                try:
+                    event_queue.enqueue_event(event)
+                except Exception as e:
+                    logger.error(f"Error enqueueing event: {str(e)}")
+                    raise
+        except Exception as e:
+            logger.error(f"Error in stream: {str(e)}")
+            error_message = Message(
+                messageId=str(uuid.uuid4()),
+                role=Role.agent,
+                parts=[TextPart(text=f"Error: {str(e)}")]
+            )
+            try:
+                event_queue.enqueue_event(TaskStatusUpdateEvent(
+                    contextId=context.context_id,
+                    taskId=context.task_id,
+                    status=TaskStatus(
+                        state=TaskState.failed,
+                        message=error_message,
+                        timestamp=datetime.now(UTC).isoformat()
+                    ),
+                    final=True
+                ))
+            except Exception as e2:
+                logger.error(f"Error sending error event: {str(e2)}")
 
     @override
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
-        logger.debug("Enqueueing task status: cancelled")
+        """Handle task cancellation."""
+        logger.info(f"[ORCHESTRATOR] Cancelling task {context.task_id}")
         try:
-            event_queue.enqueue_event(create_task_status_event(
-                context.task_id,
-                create_task_status(TaskState.cancelled)
+            # Get task
+            task = await self.task_store.get(context.task_id)
+            if task:
+                # Update task status
+                task.status = TaskStatus(
+                    state=TaskState.canceled,
+                    timestamp=datetime.now(UTC).isoformat()
+                )
+                await self.task_store.save(task)
+            
+            # Send cancellation event
+            event_queue.enqueue_event(TaskStatusUpdateEvent(
+                contextId=context.context_id,
+                taskId=context.task_id,
+                status=TaskStatus(
+                    state=TaskState.canceled,
+                    timestamp=datetime.now(UTC).isoformat()
+                ),
+                final=True
             ))
+            logger.debug("[ORCHESTRATOR] Successfully enqueued cancellation status")
         except Exception as e:
-            logger.error(f"Enqueue failed (cancelled): {type(e).__name__}: {e}")
-            raise
+            logger.error(f"[ORCHESTRATOR] Error in cancel: {str(e)}")
+            error_message = Message(
+                messageId=str(uuid.uuid4()),
+                role=Role.agent,
+                parts=[TextPart(text=f"Error cancelling task: {str(e)}")]
+            )
+            event_queue.enqueue_event(TaskStatusUpdateEvent(
+                contextId=context.context_id,
+                taskId=context.task_id,
+                status=TaskStatus(
+                    state=TaskState.failed,
+                    message=error_message,
+                    timestamp=datetime.now(UTC).isoformat()
+                ),
+                final=True
+            ))
 
     async def start(self):
-        await self.serve()
+        """Start the orchestrator agent."""
+        logger.info("=== [ORCHESTRATOR] Starting OrchestratorAgent ===")
+        # Add any startup logic here
 
     async def stop(self):
-        pass 
+        """Stop the orchestrator agent."""
+        logger.info("=== [ORCHESTRATOR] Stopping OrchestratorAgent ===")
+        # Add any cleanup logic here 
