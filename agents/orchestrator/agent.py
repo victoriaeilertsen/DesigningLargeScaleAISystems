@@ -1,188 +1,197 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import google.generativeai as genai
 import os
 import requests
 from dotenv import load_dotenv
-import traceback
 import logging
-from datetime import datetime
 import time
-
-# Logging configuration
-class CustomFormatter(logging.Formatter):
-    """Custom formatter with emojis for different log levels"""
-    
-    def format(self, record):
-        # Add emojis based on log level
-        if record.levelno == logging.INFO:
-            record.msg = f"ℹ️ {record.msg}"
-        elif record.levelno == logging.WARNING:
-            record.msg = f"⚠️ {record.msg}"
-        elif record.levelno == logging.ERROR:
-            record.msg = f"❌ {record.msg}"
-        elif record.levelno == logging.DEBUG:
-            record.msg = f"🔍 {record.msg}"
-        return super().format(record)
+from typing import Dict, Any
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationChain
+from langchain.prompts import PromptTemplate
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('orchestrator.log'),
-        logging.StreamHandler()
-    ]
-)
-
-# Apply custom formatter
-for handler in logging.getLogger().handlers:
-    handler.setFormatter(CustomFormatter())
-
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-
-# Gemini configuration
-api_key = os.getenv("GOOGLE_API_KEY")
-if not api_key:
-    raise ValueError("GOOGLE_API_KEY not found in .env file")
-
-try:
-    logger.info("Initializing Gemini...")
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    
-    # Test Gemini connection
-    logger.info("Testing Gemini connection...")
-    test_response = model.generate_content("Hello")
-    logger.info(f"Gemini test response: {test_response.text}")
-    logger.info("Gemini initialized successfully")
-except Exception as e:
-    logger.error(f"Failed to initialize Gemini: {str(e)}")
-    raise
-
-app = FastAPI(title="Orchestrator Agent")
-
-class Message(BaseModel):
-    content: str
-
-AGENTS = {
-    "classifier": {"port": 8001, "name": "Needs Analyzer"},
-    "shopping": {"port": 8002, "name": "Shopping Assistant"}
-}
-
-# Timeout settings
-REQUEST_TIMEOUT = 10  # seconds
-MAX_RETRIES = 2
-
-def get_agent_response(port, message):
-    for attempt in range(MAX_RETRIES):
-        try:
-            logger.info(f"Sending message to agent on port {port} (attempt {attempt + 1}/{MAX_RETRIES})")
-            start_time = time.time()
-            
-            response = requests.post(
-                f"http://localhost:{port}/chat",
-                json={"content": message},
-                timeout=REQUEST_TIMEOUT
-            )
-            
-            elapsed_time = time.time() - start_time
-            logger.info(f"Response received in {elapsed_time:.2f} seconds")
-            
-            if response.status_code == 200:
-                logger.info(f"Received response from agent on port {port}")
-                return response.json()["response"]
-            else:
-                error_msg = f"Agent communication error: {response.status_code}"
-                logger.error(error_msg)
-                if attempt < MAX_RETRIES - 1:
-                    time.sleep(1)  # Wait before retry
-                    continue
-                return error_msg
-                
-        except requests.Timeout:
-            logger.error(f"Timeout while waiting for agent on port {port}")
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(1)
-                continue
-            return "Agent response timeout. Please try again."
-            
-        except Exception as e:
-            error_msg = f"Agent connection error: {str(e)}"
-            logger.error(error_msg)
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(1)
-                continue
-            return error_msg
-    
-    return "Failed to get response from agent after multiple attempts."
-
-@app.post("/chat")
-async def chat(message: Message):
-    try:
-        logger.info(f"Received new message: {message.content}")
+class OrchestratorAgent:
+    def __init__(self):
+        load_dotenv()
+        self._load_prompt()
+        self._initialize_chain()
         
-        # For initial testing, return a simple response
-        if message.content.lower() in ["hello", "hi", "hey"]:
-            return {"response": "Hello! I'm your shopping assistant. How can I help you today?"}
+        # Agent configuration
+        self.agents = {
+            "classifier": {"port": 8001, "name": "Needs Analyzer"},
+            "shopping": {"port": 8002, "name": "Shopping Assistant"}
+        }
         
+        # Timeout settings
+        self.request_timeout = 10  # seconds
+        self.max_retries = 2
+    
+    def _load_prompt(self):
+        """Load the system prompt from prompt.txt"""
         try:
-            with open("prompt.txt", "r", encoding="utf-8") as f:
-                system_prompt = f.read()
+            with open("agents/orchestrator/prompt.txt", "r", encoding="utf-8") as f:
+                self.system_prompt = f.read()
             logger.info("Successfully loaded prompt.txt")
         except Exception as e:
             logger.error(f"Failed to load prompt.txt: {str(e)}")
-            raise HTTPException(status_code=500, detail="Failed to load system prompt")
-        
-        # Prepare Gemini context with timeout
-        logger.info("Starting Gemini analysis...")
-        start_time = time.time()
-        
+            raise
+    
+    def _initialize_chain(self):
+        """Initialize LangChain components"""
         try:
-            logger.info("Creating new chat session...")
-            chat = model.start_chat(history=[])
+            # Initialize Google Generative AI
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if not api_key:
+                raise ValueError("GOOGLE_API_KEY not found in .env file")
             
-            logger.info("Sending message to Gemini...")
-            response = chat.send_message(
-                f"{system_prompt}\n\nUser message: {message.content}",
-                timeout=REQUEST_TIMEOUT
+            self.chat_model = ChatGoogleGenerativeAI(
+                model="gemini-1.5-flash",
+                temperature=0.7,
+                google_api_key=api_key
             )
             
-            elapsed_time = time.time() - start_time
-            logger.info(f"Gemini analysis completed in {elapsed_time:.2f} seconds")
-            logger.info(f"Gemini response: {response.text}")
+            # Initialize memory
+            self.memory = ConversationBufferMemory(
+                memory_key="chat_history",
+                return_messages=True
+            )
+            
+            # Create prompt template for agent selection
+            self.agent_selection_prompt = PromptTemplate(
+                input_variables=["chat_history", "human_input"],
+                template=f"""
+                {self.system_prompt}
+                
+                Previous conversation:
+                {{chat_history}}
+                
+                Human: {{human_input}}
+                
+                Based on the conversation, determine which agent should handle this request.
+                Respond with ONLY one word: 'classifier' or 'shopping'
+                Assistant:"""
+            )
+            
+            # Initialize agent selection chain
+            self.agent_selection_chain = ConversationChain(
+                llm=self.chat_model,
+                memory=self.memory,
+                prompt=self.agent_selection_prompt,
+                input_key="human_input",
+                verbose=True
+            )
+            
+            logger.info("Successfully initialized LangChain components")
             
         except Exception as e:
-            logger.error(f"Gemini analysis failed: {str(e)}")
-            logger.error("Full traceback:")
-            logger.error(traceback.format_exc())
-            return {"response": "I'm having trouble analyzing your message. Please try again."}
+            logger.error(f"Failed to initialize LangChain: {str(e)}")
+            raise
+    
+    def _get_agent_response(self, port: int, message: str) -> str:
+        """
+        Get response from a specific agent
         
-        # Analyze response and choose appropriate agent
-        agent_choice = response.text.lower()
-        logger.info(f"Gemini agent choice: {agent_choice}")
-        
-        if "classifier" in agent_choice or "analyzer" in agent_choice:
-            logger.info("Selected Needs Analyzer")
-            agent_response = get_agent_response(AGENTS["classifier"]["port"], message.content)
-            return {"response": f"Selected {AGENTS['classifier']['name']}:\n{agent_response}"}
-        elif "shopping" in agent_choice or "shop" in agent_choice:
-            logger.info("Selected Shopping Assistant")
-            agent_response = get_agent_response(AGENTS["shopping"]["port"], message.content)
-            return {"response": f"Selected {AGENTS['shopping']['name']}:\n{agent_response}"}
-        else:
-            logger.warning("Could not determine appropriate agent")
-            return {"response": "I cannot determine which agent should handle this request. Please try rephrasing."}
+        Args:
+            port (int): The port number of the agent
+            message (str): The message to send
             
-    except Exception as e:
-        logger.error(f"Error occurred: {str(e)}")
-        logger.error("Full traceback:")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    logger.info("Starting Orchestrator server...")
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+        Returns:
+            str: The agent's response
+        """
+        for attempt in range(self.max_retries):
+            try:
+                logger.info(f"Sending message to agent on port {port} (attempt {attempt + 1}/{self.max_retries})")
+                start_time = time.time()
+                
+                response = requests.post(
+                    f"http://localhost:{port}/chat",
+                    json={"content": message},
+                    timeout=self.request_timeout
+                )
+                
+                elapsed_time = time.time() - start_time
+                logger.info(f"Response received in {elapsed_time:.2f} seconds")
+                
+                if response.status_code == 200:
+                    logger.info(f"Received response from agent on port {port}")
+                    return response.json()["response"]
+                else:
+                    error_msg = f"Agent communication error: {response.status_code}"
+                    logger.error(error_msg)
+                    if attempt < self.max_retries - 1:
+                        time.sleep(1)
+                        continue
+                    return error_msg
+                    
+            except requests.Timeout:
+                logger.error(f"Timeout while waiting for agent on port {port}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return "Agent response timeout. Please try again."
+                
+            except Exception as e:
+                error_msg = f"Agent connection error: {str(e)}"
+                logger.error(error_msg)
+                if attempt < self.max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return error_msg
+        
+        return "Failed to get response from agent after multiple attempts."
+    
+    def process_message(self, message: str) -> Dict[str, Any]:
+        """
+        Process the user message and route it to appropriate agent
+        
+        Args:
+            message (str): The user's message
+            
+        Returns:
+            Dict[str, Any]: Response containing the selected agent and its response
+        """
+        try:
+            # For initial testing, return a simple response
+            if message.lower() in ["hello", "hi", "hey"]:
+                return {
+                    "agent": "orchestrator",
+                    "response": "Hello! I'm your shopping assistant. How can I help you today?"
+                }
+            
+            # Use LangChain to determine which agent should handle the message
+            agent_choice = self.agent_selection_chain.predict(human_input=message).strip().lower()
+            logger.info(f"Selected agent: {agent_choice}")
+            
+            if agent_choice == "classifier":
+                logger.info("Routing to Needs Analyzer")
+                agent_response = self._get_agent_response(
+                    self.agents["classifier"]["port"], 
+                    message
+                )
+                return {
+                    "agent": self.agents["classifier"]["name"],
+                    "response": agent_response
+                }
+            elif agent_choice == "shopping":
+                logger.info("Routing to Shopping Assistant")
+                agent_response = self._get_agent_response(
+                    self.agents["shopping"]["port"], 
+                    message
+                )
+                return {
+                    "agent": self.agents["shopping"]["name"],
+                    "response": agent_response
+                }
+            else:
+                logger.warning("Could not determine appropriate agent")
+                return {
+                    "agent": "orchestrator",
+                    "response": "I cannot determine which agent should handle this request. Please try rephrasing."
+                }
+                
+        except Exception as e:
+            logger.error(f"Error processing message: {str(e)}")
+            raise 

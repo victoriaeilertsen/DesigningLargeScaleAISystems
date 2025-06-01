@@ -1,7 +1,10 @@
-fastapi==0.104.1
-uvicorn==0.24.0
-python-dotenv>=1.0.0
-google-generativeai>=0.3.0
-pydantic==2.4.2
-requests>=2.31.0
-streamlit>=1.31.0 
+fastapi==0.109.2
+uvicorn==0.27.1
+python-dotenv==1.0.1
+google-generativeai==0.4.1
+streamlit==1.31.1
+requests==2.31.0
+langchain-core
+langchain
+langchain-google-genai
+langchain-community
