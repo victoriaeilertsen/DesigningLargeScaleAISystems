@@ -169,7 +169,7 @@ if __name__ == "__main__":
         if not wait_for_agent(port):
             all_ready = False
             break
-    
+        
     if all_ready:
         # Run frontend
         streamlit_process = run_streamlit()
@@ -183,9 +183,9 @@ if __name__ == "__main__":
                 streamlit_process.terminate()
                 for process in agent_processes.values():
                     process.terminate()
-    else:
-        logger.error("❌ Failed to start all agents")
-        # Terminate any started processes
-        for process in agent_processes.values():
-            process.terminate()
-        sys.exit(1) 
+        else:
+            logger.error("❌ Failed to start all agents")
+            # Terminate any started processes
+            for process in agent_processes.values():
+                process.terminate()
+            sys.exit(1) 

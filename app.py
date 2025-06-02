@@ -4,174 +4,123 @@ import json
 from datetime import datetime
 import time
 
-# Page configuration
+# --- PAGE CONFIG ---
 st.set_page_config(
     page_title="Shopping Assistant",
     page_icon="🛍️",
     layout="wide"
 )
 
-# CSS styles
+# --- SESSION STATE ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "wishlist" not in st.session_state:
+    st.session_state.wishlist = []
+
+# --- CUSTOM CSS ---
 st.markdown("""
 <style>
-    .main {
-        padding: 2rem;
-    }
-    .stTextInput>div>div>input {
-        font-size: 1.1rem;
-    }
-    .chat-message {
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
-        display: flex;
-        flex-direction: column;
-    }
-    .chat-message.user {
-        background-color: #2b313e;
-    }
-    .chat-message.assistant {
-        background-color: #475063;
-    }
-    .chat-message .content {
-        display: flex;
-        margin-top: 0.5rem;
-    }
-    .processing-status {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        color: #8b9cb3;
-        font-style: italic;
-        margin-top: 0.5rem;
-    }
-    .agent-info {
-        font-size: 0.8rem;
-        color: #8b9cb3;
-        margin-top: 0.5rem;
-    }
-    @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-    }
-    .spinner {
-        display: inline-block;
-        width: 1rem;
-        height: 1rem;
-        border: 2px solid #8b9cb3;
-        border-radius: 50%;
-        border-top-color: transparent;
-        animation: spin 1s linear infinite;
-    }
-    .agent-transition {
-        font-size: 0.9rem;
-        color: #8b9cb3;
-        margin: 0.5rem 0;
-        padding: 0.5rem;
-        border-left: 3px solid #8b9cb3;
-        background-color: rgba(139, 156, 179, 0.1);
-    }
+.block-container { padding-top: 2rem !important; }
+.agent-transition { font-size: 0.9rem; color: #8b9cb3; margin: 0.5rem 0; padding: 0.5rem; border-left: 3px solid #8b9cb3; background-color: rgba(139, 156, 179, 0.1); }
+.wishlist-box { background: #232b3b; border-radius: 1rem; box-shadow: 0 2px 8px #0002; padding: 1.2rem 1.2rem 0.5rem 1.2rem; border: 1.5px solid #3a4252; min-height: 560px; max-height: 560px; display: flex; flex-direction: column; }
+.wishlist-title-row { display: flex; align-items: center; justify-content: flex-end; margin-bottom: 0.2rem; margin-top: 0; }
+.wishlist-title { font-size: 1.5rem; font-weight: 600; color: #fff; margin-right: 0.5rem; }
+.wishlist-badge { display: inline-block; min-width: 32px; padding: 0.2em 0.7em; font-size: 1.1rem; font-weight: 700; color: #fff; background: linear-gradient(90deg, #6a8cff 0%, #b16cff 100%); border-radius: 1em; margin-left: 0.2em; box-shadow: 0 1px 4px #0002; }
+.clear-btn-row { display: flex; justify-content: flex-end; align-items: center; margin-bottom: 0.5rem; margin-top: 0.5rem; }
+.chat-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; margin-top: 0.5rem; }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if "messages" not in st.session_state:
+# --- LAYOUT ---
+header_col1, header_col2 = st.columns([3, 1], gap="large")
+
+with header_col1:
+    st.markdown("""
+    <div class='chat-header-row'>
+        <div style='font-size:2.1rem;font-weight:700;color:#fff;display:inline-block;'>🛍️ Shopping Assistant</div>
+        <span style='float:right;'>
+            <form action="#" method="post" style="margin:0;display:inline;">
+                <button type="submit" name="clear_chat" style="background: #232b3b; color: #fff; border: 1.5px solid #3a4252; border-radius: 0.7em; font-size: 1.1rem; font-weight: 500; padding: 0.5em 1.2em; cursor: pointer; transition: background 0.2s;">🗑️ Clear Chat History</button>
+            </form>
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+with header_col2:
+    st.markdown(f"""
+    <div class='wishlist-title-row' style='justify-content:flex-end; margin-top:0.5rem; margin-bottom:0.5rem;'>
+        <span class='wishlist-title' style='font-size:2.1rem;font-weight:700;color:#fff;margin-right:0.5rem;'>Wishlist</span>
+        <span class='wishlist-badge'>{len(st.session_state.wishlist)}</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+main_col, wishlist_col = st.columns([3, 1], gap="large")
+
+# --- CLEAR CHAT BUTTON HANDLER ---
+if st.query_params.get("clear_chat") == "true":
     st.session_state.messages = []
+    st.query_params.clear()
 
-# Header
-st.title("🛍️ Shopping Assistant")
-
-# Chat container
-chat_container = st.container()
-
-# Display message history
-with chat_container:
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-            if "route" in message:
-                st.markdown(f'<div class="agent-transition">🔄 Route: {message["route"]}</div>', unsafe_allow_html=True)
-
-# Message input
-if prompt := st.chat_input("Type your message..."):
-    # Add user message to history
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    
-    # Display user message
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    
-    # Display assistant message (placeholder)
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        status_placeholder = st.empty()
-        
-        # Show initial processing status
-        status_placeholder.markdown(
-            '<div class="processing-status"><div class="spinner"></div> 🤔 Orchestrator Agent is analyzing your request...</div>',
-            unsafe_allow_html=True
-        )
-        
-        try:
-            # Send request to API with increased timeout
-            response = requests.post(
-                "http://localhost:8000/chat",
-                json={"content": prompt},
-                timeout=25
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                assistant_response = data["response"]
-                agent_info = data.get("agent_info", "Shopping Agent")
-                route = data.get("route", "Orchestrator → Shopping Agent")
-                
-                # Update status based on agent
-                if "classifier" in agent_info.lower():
-                    status_placeholder.markdown(
-                        '<div class="processing-status"><div class="spinner"></div> 🔍 Classifier Agent is analyzing your requirements...</div>',
-                        unsafe_allow_html=True
-                    )
-                elif "shopping" in agent_info.lower():
-                    status_placeholder.markdown(
-                        '<div class="processing-status"><div class="spinner"></div> 🛍️ Shopping Agent is searching for products...</div>',
-                        unsafe_allow_html=True
-                    )
-                
-                # Display response
-                message_placeholder.markdown(assistant_response)
-                # Display route immediately under the response
-                st.markdown(f'<div class="agent-transition">🔄 Route: {route}</div>', unsafe_allow_html=True)
-                
-                # Update final status
-                status_placeholder.markdown("")
-                
-                # Add to history with route only
+# --- CHAT PANEL ---
+with main_col:
+    chat_container = st.container(height=500)
+    with chat_container:
+        for idx, message in enumerate(st.session_state.messages):
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+                if "route" in message:
+                    st.markdown(f'<div class="agent-transition">🔄 Route: {message["route"]}</div>', unsafe_allow_html=True)
+                if message["role"] == "assistant" and any(x in message["content"] for x in ["1.", "- ", "• "]):
+                    lines = message["content"].split("\n")
+                    for line in lines:
+                        if line.strip().startswith("1."):
+                            product = line.strip()[2:].strip()
+                            if st.button(f"Add to wishlist: {product}", key=f"add_{idx}"):
+                                if product not in st.session_state.wishlist:
+                                    st.session_state.wishlist.append(product)
+                                    st.success(f"Added '{product}' to wishlist!")
+    prompt = st.chat_input("Type your message...")
+    if prompt:
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.spinner("Processing..."):
+            try:
+                response = requests.post(
+                    "http://localhost:8000/chat",
+                    json={"content": prompt},
+                    timeout=25
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    assistant_response = data["response"]
+                    route = data.get("route", "?")
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": assistant_response,
+                        "route": route
+                    })
+                else:
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": "Sorry, there was a problem processing your request.",
+                        "route": "?"
+                    })
+            except Exception as e:
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": assistant_response,
-                    "route": route
+                    "content": f"Sorry, an error occurred: {str(e)}",
+                    "route": "?"
                 })
-            else:
-                status_placeholder.markdown(
-                    '<div class="processing-status">❌ Error communicating with the assistant</div>',
-                    unsafe_allow_html=True
-                )
-                message_placeholder.markdown("Sorry, there was a problem processing your request.")
-        except requests.exceptions.Timeout:
-            status_placeholder.markdown(
-                '<div class="processing-status">⏳ The request is taking longer than expected. Please wait...</div>',
-                unsafe_allow_html=True
-            )
-            message_placeholder.markdown("The system is still processing your request. Please wait a moment.")
-        except Exception as e:
-            status_placeholder.markdown(
-                '<div class="processing-status">❌ An error occurred</div>',
-                unsafe_allow_html=True
-            )
-            message_placeholder.markdown(f"Sorry, an error occurred: {str(e)}")
+        st.rerun()
 
-# Clear history button
-if st.button("🗑️ Clear History"):
-    st.session_state.messages = []
-    st.rerun() 
+# --- WISHLIST PANEL ---
+with wishlist_col:
+    st.markdown("<div class='wishlist-box'>", unsafe_allow_html=True)
+    st.markdown("<div class='wishlist-scroll'>", unsafe_allow_html=True)
+    if st.session_state.wishlist:
+        for i, item in enumerate(st.session_state.wishlist):
+            st.markdown(f"- {item}")
+            if st.button(f"Remove", key=f"rem_{i}"):
+                st.session_state.wishlist.pop(i)
+                st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True) 
