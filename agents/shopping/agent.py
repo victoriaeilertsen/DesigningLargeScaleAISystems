@@ -31,9 +31,9 @@ class ShoppingAgent:
         """Initialize LangChain components"""
         try:
             # Initialize Perplexity chat model
-            perplexity_api_key = os.getenv("PERPLEXITY_API_KEY")
+            perplexity_api_key = os.getenv("PPLX_API_KEY")
             if not perplexity_api_key:
-                raise ValueError("PERPLEXITY_API_KEY not found in .env file")
+                raise ValueError("PPLX_API_KEY not found in .env file")
             
             self.chat_model = ChatPerplexity(
                 model="sonar",

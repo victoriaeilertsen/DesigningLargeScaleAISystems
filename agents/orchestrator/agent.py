@@ -126,72 +126,82 @@ class OrchestratorAgent:
                         continue
                     return error_msg
                     
-            except requests.Timeout:
-                logger.error(f"Timeout while waiting for agent on port {port}")
-                if attempt < self.max_retries - 1:
-                    time.sleep(1)
-                    continue
-                return "Agent response timeout. Please try again."
-                
+            except requests.exceptions.Timeout:
+                logger.error("Timeout while waiting for agent on port 8002")
+                return {
+                    "response": "Sorry, the shopping agent is not responding. Please try again in a moment.",
+                    "agent_info": "Orchestrator"
+                }
             except Exception as e:
-                error_msg = f"Agent connection error: {str(e)}"
-                logger.error(error_msg)
-                if attempt < self.max_retries - 1:
-                    time.sleep(1)
-                    continue
-                return error_msg
+                logger.error(f"Error communicating with shopping agent: {str(e)}")
+                return {
+                    "response": "Sorry, there was an error communicating with the shopping agent.",
+                    "agent_info": "Orchestrator"
+                }
         
         return "Failed to get response from agent after multiple attempts."
     
     def process_message(self, message: str) -> Dict[str, Any]:
         """
         Process the user message and route it to appropriate agent
-        
-        Args:
-            message (str): The user's message
-            
-        Returns:
-            Dict[str, Any]: Response containing the selected agent and its response
         """
         try:
+            route = ["Orchestrator"]
             # For initial testing, return a simple response
             if message.lower() in ["hello", "hi", "hey"]:
                 return {
-                    "agent": "orchestrator",
-                    "response": "Hello! I'm your shopping assistant. How can I help you today?"
+                    "response": "Hello! I'm your shopping assistant. How can I help you today?",
+                    "route": "Orchestrator"
                 }
-            
             # Use LangChain to determine which agent should handle the message
             agent_choice = self.agent_selection_chain.predict(human_input=message).strip().lower()
             logger.info(f"Selected agent: {agent_choice}")
-            
             if agent_choice == "classifier":
+                route.append("Classifier")
                 logger.info("Routing to Needs Analyzer")
                 agent_response = self._get_agent_response(
                     self.agents["classifier"]["port"], 
                     message
                 )
-                return {
-                    "agent": self.agents["classifier"]["name"],
-                    "response": agent_response
-                }
+                # Sprawdź, czy jest podsumowanie
+                if isinstance(agent_response, str) and "---SUMMARY---" in agent_response:
+                    # Wyodrębnij podsumowanie
+                    summary = agent_response.split("Summary of requirements:",1)[-1].split("---SUMMARY---")[0].strip()
+                    summary_message = f"Summary of requirements:\n{summary}"
+                    # Przekaż do Shopping Agent
+                    route.extend(["Orchestrator", "Shopping Agent"])
+                    shopping_response = self._get_agent_response(
+                        self.agents["shopping"]["port"],
+                        summary_message
+                    )
+                    return {
+                        "response": shopping_response,
+                        "route": " -> ".join(route)
+                    }
+                else:
+                    return {
+                        "response": agent_response,
+                        "route": " -> ".join(route)
+                    }
             elif agent_choice == "shopping":
+                route.append("Shopping Agent")
                 logger.info("Routing to Shopping Assistant")
                 agent_response = self._get_agent_response(
                     self.agents["shopping"]["port"], 
                     message
                 )
                 return {
-                    "agent": self.agents["shopping"]["name"],
-                    "response": agent_response
+                    "response": agent_response,
+                    "route": " -> ".join(route)
                 }
             else:
-                logger.warning("Could not determine appropriate agent")
                 return {
-                    "agent": "orchestrator",
-                    "response": "I cannot determine which agent should handle this request. Please try rephrasing."
+                    "response": "I cannot determine which agent should handle this request. Please try rephrasing.",
+                    "route": "Orchestrator"
                 }
-                
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
-            raise 
+            return {
+                "response": f"Sorry, an error occurred: {str(e)}",
+                "route": "Orchestrator"
+            } 
