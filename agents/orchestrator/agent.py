@@ -8,6 +8,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationChain
 from langchain.prompts import PromptTemplate
+import traceback
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -112,10 +113,11 @@ Assistant:"""
                 logger.info(f"Response received in {elapsed_time:.2f} seconds")
 
                 if response.status_code == 200:
-                    logger.info(f"Received response from agent on port {port}")
-                    return response.json()["response"]
+                    response_data = response.json()
+                    logger.info(f"Received response from agent on port {port}: {response_data}")
+                    return response_data["response"]
                 else:
-                    error_msg = f"Agent communication error: {response.status_code}"
+                    error_msg = f"Agent communication error: {response.status_code} - {response.text}"
                     logger.error(error_msg)
                     if attempt < self.max_retries - 1:
                         time.sleep(1)
@@ -123,10 +125,18 @@ Assistant:"""
                     return error_msg
             except requests.exceptions.Timeout:
                 logger.error(f"Timeout while waiting for agent on port {port}")
-                continue
+                if attempt < self.max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return "Timeout while waiting for agent response."
             except Exception as e:
                 logger.error(f"Error communicating with agent on port {port}: {str(e)}")
-                continue
+                logger.error("Full traceback:")
+                logger.error(traceback.format_exc())
+                if attempt < self.max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return f"Error communicating with agent: {str(e)}"
         return "Failed to get response from agent after multiple attempts."
 
     def process_message(self, message: str) -> Dict[str, Any]:

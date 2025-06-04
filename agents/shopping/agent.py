@@ -6,6 +6,8 @@ from langchain.schema import HumanMessage, SystemMessage
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationChain
 from langchain.prompts import PromptTemplate
+import traceback
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -75,6 +77,41 @@ class ShoppingAgent:
             logger.error(f"Failed to initialize LangChain: {str(e)}")
             raise
     
+    def _extract_requirements(self, message: str) -> dict:
+        """Extract key requirements from the message"""
+        requirements = {
+            "product_type": None,
+            "budget": None,
+            "usage": None,
+            "specific_requirements": []
+        }
+        
+        # Extract budget
+        budget_match = re.search(r"max\s*(\d+)\s*(?:euro|€|EUR)", message.lower())
+        if budget_match:
+            requirements["budget"] = int(budget_match.group(1))
+        
+        # Extract product type
+        product_types = ["bike", "bicycle", "tablegame", "book", "laptop"]
+        for product_type in product_types:
+            if product_type in message.lower():
+                requirements["product_type"] = product_type
+                break
+        
+        # Extract usage
+        usage_patterns = {
+            "city": ["city", "urban", "commuting"],
+            "mountain": ["mountain", "off-road", "trail"],
+            "road": ["road", "racing", "speed"]
+        }
+        
+        for usage, patterns in usage_patterns.items():
+            if any(pattern in message.lower() for pattern in patterns):
+                requirements["usage"] = usage
+                break
+        
+        return requirements
+    
     def process_message(self, message: str) -> str:
         """
         Process the user message and return a response
@@ -86,9 +123,27 @@ class ShoppingAgent:
             str: The agent's response
         """
         try:
+            logger.info(f"Processing message: {message}")
+            
+            # Extract requirements
+            requirements = self._extract_requirements(message)
+            logger.info(f"Extracted requirements: {requirements}")
+            
+            # Add requirements to the message if they're not already present
+            if "Summary of requirements:" not in message:
+                message = f"Summary of requirements:\n" + \
+                         f"* Product type: {requirements['product_type'] or 'Unspecified'}\n" + \
+                         f"* Budget: €{requirements['budget'] or 'Unspecified'}\n" + \
+                         f"* Usage: {requirements['usage'] or 'Unspecified'}\n" + \
+                         f"* Specific requirements: {'None specified' if not requirements['specific_requirements'] else ', '.join(requirements['specific_requirements'])}\n\n" + \
+                         f"---SUMMARY---\n\n" + message
+            
             # Process message through LangChain
             response = self.conversation.predict(human_input=message)
+            logger.info(f"Received response from Perplexity API: {response}")
             return response
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
+            logger.error("Full traceback:")
+            logger.error(traceback.format_exc())
             raise 

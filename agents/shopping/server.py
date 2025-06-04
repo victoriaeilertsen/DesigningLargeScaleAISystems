@@ -24,13 +24,16 @@ except Exception as e:
 @app.post("/chat")
 async def chat(message: Message):
     try:
+        logger.info(f"Received message: {message.content}")
         response = agent.process_message(message.content)
+        logger.info(f"Sending response: {response}")
         return {"response": response}
     except Exception as e:
-        logger.error(f"Error details: {str(e)}")
+        error_msg = f"Error processing message: {str(e)}"
+        logger.error(error_msg)
         logger.error("Full traceback:")
         logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=error_msg)
 
 if __name__ == "__main__":
     import uvicorn
