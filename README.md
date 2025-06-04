@@ -12,4 +12,4 @@ A system that provides users with personalized recommendations on where to buy o
 [Architecture](https://docs.google.com/document/d/1PZxl9DKgZ1k43cUaACFFCBOGsh6hGpejIbebC1EXNws/edit?usp=sharing)
 
 
-[Evaluation](https://docs.google.com/document/d/1cVZ5jPAirzwGO0M9XitxyHRLzTxusV2qWz1LlEDi5wE/edit?usp=sharing)
+[Evaluation]([https://docs.google.com/document/d/1cVZ5jPAirzwGO0M9XitxyHRLzTxusV2qWz1LlEDi5wE/edit?usp=sharing](https://docs.google.com/document/d/15Cuomhum6whtsCxhL-AZYyOcmrOzkbDkOPFBaoGFLn8/edit?usp=sharing))
